@@ -21,7 +21,8 @@
  * scaled up by the largest integer factor that fits the panel, centred on a
  * black background and written into the RGB888 frame buffer in bulk SRAM.
  * The display is brought up on the first call (CDC200 + DSI + panel), as in
- * the pack's Boards/Templates/Baremetal/demo_cdc200.c.
+ * the pack's Boards/Templates/Baremetal/demo_cdc200.c. board_display_banner()
+ * writes a status word into a banner above the image area.
  *---------------------------------------------------------------------------*/
 
 #include <stdint.h>
@@ -138,5 +139,83 @@ int board_display_image(const uint8_t *rgb, int width, int height, int channels)
     /* The frame buffer is read by the display controller's DMA: push the
        cached lines out (bulk SRAM is write-through, but be explicit). */
     SCB_CleanDCache_by_Addr((uint32_t *) &lcd_frame[y0][0][0], (int32_t)(out_h * LCD_WIDTH * LCD_BPP));
+    return 0;
+}
+
+/* 5 x 7 glyphs (bit 4 = left column) for the status words; other characters
+   are drawn blank. */
+static const struct {
+    char    c;
+    uint8_t rows[7];
+} banner_font[] = {
+    {'A', {0x0E, 0x11, 0x11, 0x1F, 0x11, 0x11, 0x11}},
+    {'C', {0x0E, 0x11, 0x10, 0x10, 0x10, 0x11, 0x0E}},
+    {'D', {0x1E, 0x11, 0x11, 0x11, 0x11, 0x11, 0x1E}},
+    {'E', {0x1F, 0x10, 0x10, 0x1E, 0x10, 0x10, 0x1F}},
+    {'G', {0x0E, 0x11, 0x10, 0x17, 0x11, 0x11, 0x0F}},
+    {'H', {0x11, 0x11, 0x11, 0x1F, 0x11, 0x11, 0x11}},
+    {'I', {0x0E, 0x04, 0x04, 0x04, 0x04, 0x04, 0x0E}},
+    {'K', {0x11, 0x12, 0x14, 0x18, 0x14, 0x12, 0x11}},
+    {'L', {0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x1F}},
+    {'N', {0x11, 0x19, 0x15, 0x13, 0x11, 0x11, 0x11}},
+    {'O', {0x0E, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0E}},
+    {'R', {0x1E, 0x11, 0x11, 0x1E, 0x14, 0x12, 0x11}},
+    {'T', {0x1F, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04}},
+};
+
+#define BANNER_SCALE 8                              /* 40 x 56 per glyph */
+#define BANNER_ADV   ((5 + 1) * BANNER_SCALE)       /* glyph + gap */
+#define BANNER_Y0    56                             /* above the image area */
+#define BANNER_H     (7 * BANNER_SCALE + 40)
+
+/*
+  Show a status word (up to 8 characters) in white on a coloured banner
+  across the top of the panel, above the centred image area that
+  board_display_image() uses for 128 x 128 images (rows 208-591), so a new
+  image does not overwrite it.
+
+  \return      0 on success, -1 when the display is not available
+*/
+int board_display_banner(const char *text, uint8_t r, uint8_t g, uint8_t b)
+{
+    if (!display_ready) {
+        if (display_init() != 0) {
+            return -1;
+        }
+        display_ready = 1;
+    }
+
+    for (int y = BANNER_Y0; y < BANNER_Y0 + BANNER_H; y++) {
+        for (int x = 0; x < LCD_WIDTH; x++) {
+            lcd_frame[y][x][0] = b;
+            lcd_frame[y][x][1] = g;
+            lcd_frame[y][x][2] = r;
+        }
+    }
+
+    const int n  = (int) strnlen(text, 8);
+    const int x0 = (LCD_WIDTH - (n * BANNER_ADV - BANNER_SCALE)) / 2;
+    const int y0 = BANNER_Y0 + (BANNER_H - 7 * BANNER_SCALE) / 2;
+    for (int i = 0; i < n; i++) {
+        const uint8_t *rows = NULL;
+        for (unsigned k = 0; k < sizeof banner_font / sizeof banner_font[0]; k++) {
+            if (banner_font[k].c == text[i]) {
+                rows = banner_font[k].rows;
+            }
+        }
+        if (rows == NULL) {
+            continue;
+        }
+        for (int gy = 0; gy < 7 * BANNER_SCALE; gy++) {
+            for (int gx = 0; gx < 5 * BANNER_SCALE; gx++) {
+                if (rows[gy / BANNER_SCALE] & (0x10u >> (gx / BANNER_SCALE))) {
+                    uint8_t *px = lcd_frame[y0 + gy][x0 + i * BANNER_ADV + gx];
+                    px[0] = px[1] = px[2] = 0xFF;
+                }
+            }
+        }
+    }
+    SCB_CleanDCache_by_Addr((uint32_t *) &lcd_frame[BANNER_Y0][0][0],
+                            (int32_t)(BANNER_H * LCD_WIDTH * LCD_BPP));
     return 0;
 }

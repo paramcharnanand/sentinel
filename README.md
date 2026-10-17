@@ -232,3 +232,109 @@ running (the first run builds the image, about 100 MB).
   node and `*.cbuild-mlops.yml` in detail.
 - [documentation/pack-provenance.md](documentation/pack-provenance.md): where
   the `PyTorch::ExecuTorch` pack comes from and how to move to a new version.
+
+## Sentinel: machine-health monitor (DevKit-E8)
+
+Sentinel scores the DevKit-E8's PDM microphones and BMI323 accelerometer
+against a baseline learned from a machine running normally, and shows IDLE,
+LEARNING, OK, CHECK or ALERT in a banner at the top of the LCD (above the
+face area). The pico-faces demo keeps running alongside it.
+
+### Architecture
+
+| Part | File | Work and timing |
+|------|------|-----------------|
+| Microphones | `board/DevKit-E8/mic_probe.c` | PDM channels 4/5, 16 kHz, 16-bit, `ARM_PDM_MODE_AUDIOFREQ_16K_DECM_64`, channel settings from the pack's `demo_pdm.c`. The PDM callback restarts the capture into a ring of 4 x 100 ms static blocks (25.6 kB), as the pack's `vstream_audio_in.c` does; the main loop consumes the blocks. 0 FIFO errors and 0 ring-full stops in idle runs and in 65 s of continuous face generation. A 49 kB viewer frame on the console still costs one ~4.5 s ring-full stop, so do not run `view_serial.py` with Sentinel. |
+| Accelerometer | `board/DevKit-E8/imu_probe.c` | BMI323 on I3C through the pack driver, read every 20 ms from the main loop (~120 us per read). The installed driver writes a fixed configuration and offers no rate or filter control; measured rate 50-52 new samples/s (`APP_IMU_VIBRATION_PROBE`, `imu_vib_probe.c`). |
+| Scoring | `board/DevKit-E8/sentinel.c` | 1 s windows (10 microphone blocks). Features: f0/f1 log power of channel 4/5, f2 log high-frequency ratio of channel 4 (first difference / signal; no CMSIS-DSP or FFT is installed, so no band energies), f3 log variance of the acceleration magnitude. Baseline = mean/std over 30 windows with std floors. A sensor is anomalous after 3 windows with \|z\| > 4.0 and normal after 3 windows with \|z\| < 2.5; 0/1/2 anomalous sensors = OK/CHECK/ALERT. About 68 us (worst 192 us) per 100 ms block, 1-6 us per window, all in the main loop. |
+
+Compile-time modes in `board/DevKit-E8/Board-U85.clayer.yml`: `APP_SENTINEL`
+(default), or `APP_IMU_PROBE` + `APP_MIC_PROBE` for raw sensor prints, or
+`APP_IMU_VIBRATION_PROBE` for the accelerometer rate diagnostic (one at a
+time). After switching modes build with `--rebuild`: an incremental build can
+keep objects compiled with the previous define and fail to link.
+
+### Build, flash, run
+
+```
+cbuild cmsis-executorch.csolution.yml --active DevKit-E8
+# flash (the "CMSIS Load" task does the same):
+printf 'Connect\nLoadFile "out/cmsis-executorch/DevKit-E8/Debug/cmsis-executorch.hex"\nExit\n' > .cmd.jlink
+JLinkExe -device AE822FA0E5597LS0_M55_HP -if swd -speed 4000 -commandfile .cmd.jlink
+```
+
+The load leaves the core halted: press reset (or J-Link `r`, `g`). Console:
+SW4 = UART4, 115200 8N1. After the boot face Sentinel prints one `SN t=...`
+line per second (state, z-scores, `!` = sensor anomalous, features, IMU
+new/read, block and window time in us, FIFO errors, ring-full stops).
+SW2 up = learn normal (30 s).
+
+### Safe demo: fan speed change (microphone)
+
+1. Fix the board and fan in marked positions, guard on, nothing touching the blades.
+2. Fan at medium; press SW2 up; wait for the `SN BASELINE` lines and OK.
+3. Leave medium for 45 s (expect OK), switch to high (expect CHECK on the
+   microphone), return to the same medium setting (expect OK).
+
+#### Result: current fan (validated 2026-10-17, operator present)
+
+Current fan, fixed with the board in marked positions, guard on, only the
+speed control touched (operator report). The operator confirmed on the LCD:
+grey IDLE at boot, blue LEARNING then green OK after SW2 up, amber CHECK on
+high (both times), green OK back on medium (both times).
+
+- Baseline (30 windows, about 30 s): f0 1.991 +/- 0.148, f1 0.690 +/- 0.093,
+  f2 -1.038 +/- 0.052, f3 0.882 +/- 0.189.
+- Medium before the first change (86 windows, including the 45 s
+  observation): OK throughout, mic score at most 1.8.
+- High, twice: the mic score jumps in one window (9.4 and 10.9) and CHECK
+  follows 2 s later (the 3-window rule); mic scores about 9-11 while on high,
+  f1 up about 1 decade. The operator's confirmations arrived 7 s and 7 s
+  after the jump, so the state had already changed when the change was
+  confirmed; latency is measured from the jump in the sound.
+- Back to medium, twice: the mic score drops in one window and OK follows
+  2 s later (operator confirmations 6 s and 56 s after the drop).
+- Medium between and after the cycles: OK, mic score at most 2.5; no
+  microphone false alarm.
+- Vibration: never flagged during the speed changes (vib score at most 5.5,
+  never more than 2 windows in a row above 4). In the last 15 s of the run f3 rose to about 2.0
+  and vibration alone gave 5 CHECK windows while the microphone stayed
+  normal; the operator reported no handling, so the cause is unknown. This is
+  not fan vibration detection.
+- 0 FIFO errors, 0 ring-full stops, about 99 % new accelerometer samples,
+  worst 183 us per microphone block.
+
+#### Historical runs (earlier setup, fan identity unknown)
+
+Which fan was used in these runs was not recorded; they must not be carried
+over to the current fan. Times are from the operator prompt, so they include
+the operator and the fan changing speed.
+
+- Fixed-mount run (baseline f0 = 2.50): CHECK 17 s and 22 s after the prompt
+  to go to high (about 4 s after the first window above the threshold); OK
+  10 s and 12 s after the prompt to return to medium; no false alarm in the
+  medium phases.
+- Final demo (baseline f0 = 1.61): CHECK 13 s and 17 s after the prompt to go
+  to high (2 s and 4 s after the first window above the threshold); no false
+  alarm in the medium phases. After the second return to medium, OK after
+  10 s. After the first return, the microphone features stayed at their
+  high-speed level and the state stayed CHECK for about 77 s before it went
+  to OK; the cause was not established (the fan's control position was not
+  recorded). In that period 15 windows were ALERT because the vibration score
+  rose while the setup was being handled; that is not a two-sensor fan
+  detection.
+
+This is a speed-change demonstration, not blade-fault detection.
+
+### Limitations
+
+- The installed BMI323 driver delivers only ~50 Hz samples; fan vibration at
+  medium and high speed stays at the noise floor (~0.45 mg^2) and is not
+  resolved, so the vibration score is unsupported for this fan. ALERT
+  (two sensors) has not been demonstrated on a fan fault; vibration flags
+  seen so far came from handling the setup or from disturbances of unknown
+  cause, never from the fan.
+- A phone vibrating against the setup produced a strong accelerometer signal
+  (~10^4 x the noise floor): this tests the sensor chain only, not a fan fault.
+- Microphone features are absolute levels: moving the fan or board shifts
+  them like a fault would. Re-learn after moving anything.
