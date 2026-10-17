@@ -91,3 +91,5 @@ fvp_stdout.log
 !.vscode/fvp.Dockerfile
 !.vscode/launch.json.mac
 app-release-exec-macos/
+data/
+test_host
