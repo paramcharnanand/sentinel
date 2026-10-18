@@ -236,23 +236,36 @@ running (the first run builds the image, about 100 MB).
 ## Sentinel: machine-health monitor (DevKit-E8)
 
 Sentinel scores the DevKit-E8's PDM microphones and BMI323 accelerometer
-against a baseline learned from a machine running normally, and shows IDLE,
-LEARNING, OK, CHECK or ALERT in a banner at the top of the LCD (above the
-face area). The pico-faces demo keeps running alongside it.
+against a baseline learned from a machine running normally. In the default
+status-only build the LCD shows text only, landscape and left to right:
+SENTINEL at the top, the state (IDLE, LEARNING, OK, CHECK or ALERT) large
+below it, the selected profile, the learning progress, and one line each for
+Sound and Vibration.
+The status-only build loads no model and generates no faces; the pico-faces
+example stays in the repository and runs when `APP_STATUS_ONLY` is not
+defined.
 
 ### Architecture
 
 | Part | File | Work and timing |
 |------|------|-----------------|
-| Microphones | `board/DevKit-E8/mic_probe.c` | PDM channels 4/5, 16 kHz, 16-bit, `ARM_PDM_MODE_AUDIOFREQ_16K_DECM_64`, channel settings from the pack's `demo_pdm.c`. The PDM callback restarts the capture into a ring of 4 x 100 ms static blocks (25.6 kB), as the pack's `vstream_audio_in.c` does; the main loop consumes the blocks. 0 FIFO errors and 0 ring-full stops in idle runs and in 65 s of continuous face generation. A 49 kB viewer frame on the console still costs one ~4.5 s ring-full stop, so do not run `view_serial.py` with Sentinel. |
+| Microphones | `board/DevKit-E8/mic_probe.c` | PDM channels 4/5, 16 kHz, 16-bit, `ARM_PDM_MODE_AUDIOFREQ_16K_DECM_64`, channel settings from the pack's `demo_pdm.c`. The PDM callback restarts the capture into a ring of 4 x 100 ms static blocks (25.6 kB), as the pack's `vstream_audio_in.c` does; the main loop consumes the blocks. 0 FIFO errors and 0 ring-full stops in the status-only build, in idle runs and (in the face-demo mode) in 65 s of continuous face generation. A 49 kB viewer frame on the console still costs one ~4.5 s ring-full stop, so do not run `view_serial.py` with Sentinel. |
 | Accelerometer | `board/DevKit-E8/imu_probe.c` | BMI323 on I3C through the pack driver, read every 20 ms from the main loop (~120 us per read). The installed driver writes a fixed configuration and offers no rate or filter control; measured rate 50-52 new samples/s (`APP_IMU_VIBRATION_PROBE`, `imu_vib_probe.c`). |
+| Display | `board/DevKit-E8/display.c`, `sentinel.c` | `board_display_line()` and `board_display_rect()` draw 5 x 7 text (A-Z, 0-9, `: / - .`) scaled up, in an 800 x 480 landscape view rotated into the panel's 480 x 800 RGB888 frame buffer (`APP_DISPLAY_LANDSCAPE`). Layout: title band, state band in the state colour, info line with a 30-step progress bar while learning, `SOUND:` and `VIBRATION:` lines reading MATCHES BASELINE (green), CHANGED (amber), LEARNING or NOT LEARNED. Each part is redrawn only when its text changes, from the main loop. |
 | Scoring | `board/DevKit-E8/sentinel.c` | 1 s windows (10 microphone blocks). Features: f0/f1 log power of channel 4/5, f2 log high-frequency ratio of channel 4 (first difference / signal; no CMSIS-DSP or FFT is installed, so no band energies), f3 log variance of the acceleration magnitude. Baseline = mean/std over 30 windows with std floors. A sensor is anomalous after 3 windows with \|z\| > 4.0 and normal after 3 windows with \|z\| < 2.5; 0/1/2 anomalous sensors = OK/CHECK/ALERT. About 68 us (worst 192 us) per 100 ms block, 1-6 us per window, all in the main loop. |
+| Profiles | `board/DevKit-E8/sentinel_profile_store.c` | Two separately learned baselines, stored as checksummed alternating records in the final 256 bytes of reserved user MRAM. The 16-byte write routine runs from ITCM because the pack warns against executing from MRAM while writing it. A partial or invalid record is rejected; a new profile is verified after saving. The first slot is FAN; the second is temporarily named TEMP until its appliance is chosen. TEMP is a label, not a temperature sensor. |
 
-Compile-time modes in `board/DevKit-E8/Board-U85.clayer.yml`: `APP_SENTINEL`
-(default), or `APP_IMU_PROBE` + `APP_MIC_PROBE` for raw sensor prints, or
-`APP_IMU_VIBRATION_PROBE` for the accelerometer rate diagnostic (one at a
-time). After switching modes build with `--rebuild`: an incremental build can
-keep objects compiled with the previous define and fail to link.
+Compile-time modes in `board/DevKit-E8/Board-U85.clayer.yml`: the default is
+`APP_SENTINEL` + `APP_STATUS_ONLY` + `APP_DISPLAY_LANDSCAPE` (status-only text
+demo, no model, no faces). Without `APP_STATUS_ONLY` the pico-faces demo runs
+as well, and its faces would be drawn over part of the status text (not
+tested with the text layout). Instead of
+`APP_SENTINEL` (and `APP_STATUS_ONLY`): `APP_IMU_PROBE` + `APP_MIC_PROBE` for
+raw sensor prints, or `APP_IMU_VIBRATION_PROBE` for the accelerometer rate
+diagnostic (one at a time). `DISPLAY_LANDSCAPE_FLIP: 1` turns the landscape
+view the other way round. After switching modes build with `--rebuild`: an
+incremental build can keep objects compiled with the previous define and
+fail to link.
 
 ### Build, flash, run
 
@@ -264,17 +277,66 @@ JLinkExe -device AE822FA0E5597LS0_M55_HP -if swd -speed 4000 -commandfile .cmd.j
 ```
 
 The load leaves the core halted: press reset (or J-Link `r`, `g`). Console:
-SW4 = UART4, 115200 8N1. After the boot face Sentinel prints one `SN t=...`
-line per second (state, z-scores, `!` = sensor anomalous, features, IMU
-new/read, block and window time in us, FIFO errors, ring-full stops).
-SW2 up = learn normal (30 s).
+SW4 = UART4, 115200 8N1. After boot Sentinel prints one `SN t=...` line per
+second (state, z-scores, `!` = sensor anomalous, features, IMU new/read,
+block and window time in us, FIFO errors, ring-full stops). SW2 **left**
+selects FAN; **right** selects TEMP; **up** learns/relearns the selected
+normal state (30 s). Push the joystick firmly; a light press may not register.
+On boot the board waits for a selection. If that slot has a saved baseline,
+selection checks three fresh windows (blue VERIFYING) before showing OK or
+CHECK; if empty, it stays
+IDLE until learned. Changing slots clears the partial sensor window and alarm
+history. Do not interpret OK before the appliance is running at the same
+normal condition and in the same board position as it was during learning.
+
+After a successful learn the UART must say `SN PROFILE ... saved in MRAM`.
+`WARNING: PROFILE NOT SAVED` on the LCD means the current RAM baseline works
+only until power-off; inspect the UART storage error before relying on it.
+The profile store has host tests and the firmware builds, but power-cycle and
+re-flash persistence have **not yet been verified on the physical board**.
+The firmware image does not contain learned data; a mass-erase flashing
+workflow might clear user MRAM even though this image has no records there.
+The gyroscope and chip temperature are not yet included in the score.
+
+The LCD after boot (hold the board landscape): SENTINEL, a large grey IDLE,
+`SW2 LEFT FAN RIGHT TEMP`, and `SOUND: NOT LEARNED`,
+`VIBRATION: NOT LEARNED`.
 
 ### Safe demo: fan speed change (microphone)
 
 1. Fix the board and fan in marked positions, guard on, nothing touching the blades.
-2. Fan at medium; press SW2 up; wait for the `SN BASELINE` lines and OK.
-3. Leave medium for 45 s (expect OK), switch to high (expect CHECK on the
-   microphone), return to the same medium setting (expect OK).
+2. Press SW2 left to select FAN. If it is empty or the setup changed, let the
+   fan run steadily at medium for about 10 s, room quiet; press SW2 up. The LCD
+   shows a large blue LEARNING, `BASELINE n/30 S` and a filling bar, then a
+   large green OK, `NO CHANGE FROM BASELINE` and both sensor lines
+   `MATCHES BASELINE` in green. Learn again if the fan or the room was not
+   steady: a baseline learned during changing sound makes later scores
+   meaningless (see the status-only result below).
+3. Leave medium for 45 s (expect OK), switch to high (expect a large amber
+   CHECK, `ONE SENSOR CHANGED`, `SOUND: CHANGED` in amber), return to the
+   same medium setting (expect green OK).
+
+#### Result: status-only text demo, current fan (2026-10-17, operator present)
+
+Same current fan as the result below, but moved farther from the board since
+then, so the baseline differs. The operator confirmed every LCD screen
+described above: IDLE layout, LEARNING with counter and bar, OK, CHECK with
+`SOUND: CHANGED` and `VIBRATION: MATCHES BASELINE`, and OK again.
+
+- First learning attempt: the sound during learning was louder and less
+  steady than the medium that followed (f0 1.35 +/- 0.29 against 0.63), so
+  high (f0 1.08) stayed inside the baseline and gave no CHECK. Re-learned
+  with the fan settled at medium: f0 0.519 +/- 0.072, f1 -0.282 +/- 0.103,
+  f2 -0.376 +/- 0.060, f3 0.037 +/- 0.100 (floor).
+- Medium 45 s: OK throughout, mic score at most 3.3.
+- High: the mic score jumped to 7.1 and the sound was flagged 2 s later;
+  CHECK held on high (mic scores about 5). The vibration score rose to 17
+  while the speed control was handled, which gave CHECK just before and
+  2 ALERT windows just after the sound change; that is handling, not fan
+  vibration detection.
+- Back to medium: OK 2 s after the sound dropped; 26 windows OK after.
+- 0 FIFO errors, 0 ring-full stops, about 99.6 % new accelerometer samples,
+  worst 192 us per microphone block, no unexpected restart in 10 minutes.
 
 #### Result: current fan (validated 2026-10-17, operator present)
 
@@ -338,3 +400,5 @@ This is a speed-change demonstration, not blade-fault detection.
   (~10^4 x the noise floor): this tests the sensor chain only, not a fan fault.
 - Microphone features are absolute levels: moving the fan or board shifts
   them like a fault would. Re-learn after moving anything.
+- OK means no change from the learned baseline in these two simple
+  features; it is not a statement that the machine is healthy.
