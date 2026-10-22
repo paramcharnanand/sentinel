@@ -2,6 +2,8 @@
 
 > Built at the **Arm × Alif Ensemble E8 Hackathon** (October 2026) by
 > **Param Charnanand** and **Arya Varia**.
+>
+> **Also see:** [paramcharnanand/CMSIS-Executorch](https://github.com/paramcharnanand/CMSIS-Executorch/tree/sentinel-submission) — the same project as a branch of Arm's CMSIS-ExecuTorch template, with full Alif E8 board support.
 
 Sentinel is bare-metal firmware for the Alif Ensemble E8 DevKit that learns
 how one machine normally sounds and vibrates. It keeps that baseline in
