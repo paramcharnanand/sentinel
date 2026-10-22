@@ -91,3 +91,6 @@ fvp_stdout.log
 !.vscode/fvp.Dockerfile
 !.vscode/launch.json.mac
 app-release-exec-macos/
+
+# macOS
+.DS_Store

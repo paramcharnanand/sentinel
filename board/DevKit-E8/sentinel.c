@@ -104,7 +104,7 @@ static sentinel_baseline_t sn_profiles[SENTINEL_PROFILE_COUNT];
 static int        sn_profile_valid[SENTINEL_PROFILE_COUNT];
 static int        sn_profile_saved[SENTINEL_PROFILE_COUNT];
 static int        sn_storage_error[SENTINEL_PROFILE_COUNT];
-static const char *const sn_profile_name[SENTINEL_PROFILE_COUNT] = {"FAN", "TEMP"};
+static const char *const sn_profile_name[SENTINEL_PROFILE_COUNT] = {"FAN", "PHONE"};
 
 /* Window accumulators */
 static uint32_t win_blocks;
@@ -206,7 +206,7 @@ static void sn_show(void)
     switch (sn_state) {
     case SN_IDLE:
         if (sn_selected < 0) {
-            snprintf(info, sizeof info, "SW2 LEFT FAN RIGHT TEMP");
+            snprintf(info, sizeof info, "SW2 LEFT FAN RIGHT PHONE");
         } else if (sn_storage_error[sn_selected]) {
             snprintf(info, sizeof info, "STORAGE ERROR: NOT SAVED");
         } else {
@@ -478,7 +478,7 @@ int board_sentinel_init(void)
     sn_imu_ok = (imu == 0);
     sn_reset_window();
     sn_ready = 1;
-    printf("SN: ready, %u ms windows; SW2 left = FAN, right = TEMP, up = learn selected (%u windows)\n",
+    printf("SN: ready, %u ms windows; SW2 left = FAN, right = PHONE, up = learn selected (%u windows)\n",
            SN_WINDOW_BLOCKS * 100u, SN_LEARN_WINDOWS);
     sn_show();
     return imu;
@@ -517,7 +517,7 @@ void board_sentinel_select(unsigned id)
 void board_sentinel_learn(void)
 {
     if (!sn_ready || sn_selected < 0) {
-        printf("SN: select FAN or TEMP before learning\n");
+        printf("SN: select FAN or PHONE before learning\n");
         return;
     }
     memset(bl_n, 0, sizeof bl_n);

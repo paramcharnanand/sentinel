@@ -698,7 +698,7 @@ void serve_request(EmbeddedModule& module, const char* line) {
 // and no face generation; the Sentinel sensors, scoring and LCD status run
 // here. SW2 left/right selects a profile; up learns the selected normal.
 [[noreturn]] void sensor_view() {
-  printf("Status-only demo: face generation off; SW2 left FAN, right TEMP, up learn\n");
+  printf("Status-only demo: face generation off; SW2 left FAN, right PHONE, up learn\n");
   (void)board_buttons();  // drop presses latched during boot
   (void)board_sentinel_init();
   fflush(stdout);
